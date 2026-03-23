@@ -32,14 +32,30 @@ compose() {
   return 127
 }
 
-if ! git diff --quiet || ! git diff --cached --quiet; then
-  echo "Есть незакоммиченные изменения. Закоммить/откати их перед обновлением."
-  exit 1
+had_stash=0
+stash_before="$(git rev-parse -q --verify refs/stash 2>/dev/null || true)"
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "Найдены локальные изменения — сохраняю их во временный stash и обновляю..."
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date)"
+  git stash push -u -m "auto-stash by update.sh ${ts}" >/dev/null 2>&1 || true
+  stash_after="$(git rev-parse -q --verify refs/stash 2>/dev/null || true)"
+  if [[ -n "$stash_after" && "$stash_after" != "$stash_before" ]]; then
+    had_stash=1
+  fi
 fi
 
 echo "Обновляю репозиторий..."
 git fetch --prune origin
-git pull --rebase --autostash
+git pull --rebase
+
+if [[ "$had_stash" -eq 1 ]]; then
+  echo "Возвращаю локальные изменения (stash pop)..."
+  if ! git stash pop >/dev/null 2>&1; then
+    echo "Не удалось автоматически применить stash (возможны конфликты)."
+    echo "Проверь: git status"
+    exit 1
+  fi
+fi
 
 if [[ ! -f ".env" ]]; then
   echo "Внимание: .env не найден. Запусти ./install.sh"
