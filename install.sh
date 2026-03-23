@@ -9,6 +9,18 @@ if [[ ! -f "docker-compose.yml" ]]; then
   exit 1
 fi
 
+compose() {
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    docker compose "$@"
+    return 0
+  fi
+  if command -v docker-compose >/dev/null 2>&1; then
+    docker-compose "$@"
+    return 0
+  fi
+  return 127
+}
+
 prompt_required() {
   local var_name="$1"
   local prompt="$2"
@@ -29,6 +41,56 @@ prompt_required() {
     fi
     echo "Значение обязательно."
   done
+}
+
+generate_mtp_secret() {
+  local domain="$1"
+
+  if ! command -v docker >/dev/null 2>&1; then
+    return 1
+  fi
+
+  local out=""
+  if out="$(docker run --rm p3terx/mtg generate-secret tls -c "$domain" 2>/dev/null)"; then
+    local secret=""
+    secret="$(echo "$out" | tr -d '\r' | awk 'NF{line=$0} END{print line}')"
+    if [[ -n "$secret" ]]; then
+      printf '%s' "$secret"
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+open_tcp_port_best_effort() {
+  local port="$1"
+
+  if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+    echo "Открытие порта пропущено: нужны права root."
+    return 0
+  fi
+
+  if command -v ufw >/dev/null 2>&1; then
+    ufw allow "${port}/tcp" >/dev/null 2>&1 || true
+    if ufw status 2>/dev/null | grep -qi "Status: active"; then
+      echo "UFW: открыт TCP порт ${port}."
+    else
+      echo "UFW: правило для TCP порта ${port} добавлено (UFW сейчас не активен)."
+    fi
+    return 0
+  fi
+
+  if command -v firewall-cmd >/dev/null 2>&1; then
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet firewalld; then
+      firewall-cmd --permanent --add-port="${port}/tcp" >/dev/null 2>&1 || true
+      firewall-cmd --reload >/dev/null 2>&1 || true
+      echo "firewalld: открыт TCP порт ${port}."
+      return 0
+    fi
+  fi
+
+  echo "Фаерволл не найден или не активен. Проверь порт ${port} в панели VDS/фаерволле."
 }
 
 prompt_optional() {
@@ -78,7 +140,18 @@ fi
 bot_token="$(prompt_secret_required "BOT_TOKEN (от @BotFather)")"
 proxy_host="$(prompt_required "PROXY_HOST" "PROXY_HOST (внешний IP/домен сервера)")"
 mtp_port="$(prompt_required "MTP_PORT" "MTP_PORT" "443")"
-mtp_secret="$(prompt_required "MTP_SECRET" "MTP_SECRET (секрет для mtg)")"
+mtp_secret=""
+tls_domain="$(prompt_optional "FakeTLS домен для генерации MTP_SECRET" "bing.com")"
+tls_domain="$(echo -n "$tls_domain" | tr -d '\r')"
+if [[ -z "$tls_domain" ]]; then
+  tls_domain="bing.com"
+fi
+echo
+echo "Генерирую MTP_SECRET..."
+if ! mtp_secret="$(generate_mtp_secret "$tls_domain")"; then
+  echo "Не получилось сгенерировать MTP_SECRET автоматически (нужен docker)."
+  mtp_secret="$(prompt_required "MTP_SECRET" "MTP_SECRET (вставь вручную)")"
+fi
 admin_ids="$(prompt_optional "ADMIN_IDS (опционально, через запятую)" "")"
 
 cat > ".env" <<EOF
@@ -94,16 +167,13 @@ chmod 600 ".env" 2>/dev/null || true
 echo
 echo ".env создан."
 echo
+open_tcp_port_best_effort "$mtp_port"
+echo
 
 start_now="$(prompt_optional "Запустить docker compose up -d --build сейчас? (Y/n)" "Y")"
 start_now="$(echo -n "$start_now" | tr '[:upper:]' '[:lower:]')"
 if [[ -z "$start_now" || "$start_now" == "y" || "$start_now" == "yes" ]]; then
-  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-    docker compose up -d --build
-    echo
-    echo "Готово. Напиши боту /status."
-  elif command -v docker-compose >/dev/null 2>&1; then
-    docker-compose up -d --build
+  if compose up -d --build; then
     echo
     echo "Готово. Напиши боту /status."
   else
