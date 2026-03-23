@@ -1,0 +1,22 @@
+services:
+  mtg:
+    image: p3terx/mtg:latest
+    command: ["run", "${MTP_SECRET:?MTP_SECRET is required}"]
+    ports:
+      - "${MTP_PORT:-443}:3128/tcp"
+    restart: unless-stopped
+
+  bot:
+    build:
+      context: ./bot
+    environment:
+      BOT_TOKEN: "${BOT_TOKEN:?BOT_TOKEN is required}"
+      ADMIN_IDS: "${ADMIN_IDS:-}"
+      PROXY_HOST: "${PROXY_HOST:?PROXY_HOST is required}"
+      PROXY_PORT: "${MTP_PORT:-443}"
+      PROXY_SECRET: "${MTP_SECRET:?MTP_SECRET is required}"
+      MTPROTO_INTERNAL_HOST: "mtg"
+      MTPROTO_INTERNAL_PORT: "3128"
+    depends_on:
+      - mtg
+    restart: unless-stopped
