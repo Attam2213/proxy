@@ -44,14 +44,12 @@ prompt_required() {
 }
 
 generate_mtp_secret() {
-  local domain="$1"
-
   if ! command -v docker >/dev/null 2>&1; then
     return 1
   fi
 
   local out=""
-  if out="$(docker run --rm p3terx/mtg generate-secret tls -c "$domain" 2>/dev/null)"; then
+  if out="$(docker run --rm p3terx/mtg generate-secret simple 2>/dev/null)"; then
     local secret=""
     secret="$(echo "$out" | tr -d '\r' | awk 'NF{line=$0} END{print line}')"
     if [[ -n "$secret" ]]; then
@@ -141,14 +139,9 @@ bot_token="$(prompt_secret_required "BOT_TOKEN (от @BotFather)")"
 proxy_host="$(prompt_required "PROXY_HOST" "PROXY_HOST (внешний IP/домен сервера)")"
 mtp_port="$(prompt_required "MTP_PORT" "MTP_PORT" "443")"
 mtp_secret=""
-tls_domain="$(prompt_optional "FakeTLS домен для генерации MTP_SECRET" "bing.com")"
-tls_domain="$(echo -n "$tls_domain" | tr -d '\r')"
-if [[ -z "$tls_domain" ]]; then
-  tls_domain="bing.com"
-fi
 echo
 echo "Генерирую MTP_SECRET..."
-if ! mtp_secret="$(generate_mtp_secret "$tls_domain")"; then
+if ! mtp_secret="$(generate_mtp_secret)"; then
   echo "Не получилось сгенерировать MTP_SECRET автоматически (нужен docker)."
   mtp_secret="$(prompt_required "MTP_SECRET" "MTP_SECRET (вставь вручную)")"
 fi
